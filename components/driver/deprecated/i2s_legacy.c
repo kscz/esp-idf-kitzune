@@ -753,13 +753,20 @@ static esp_err_t i2s_calculate_common_clock(int i2s_num, i2s_hal_clock_info_t *c
 {
     i2s_clk_config_t *clk_cfg = &p_i2s[i2s_num]->clk_cfg;
     i2s_hal_slot_config_t *slot_cfg = &p_i2s[i2s_num]->slot_cfg;
-    uint32_t rate     = clk_cfg->sample_rate_hz;
+    uint32_t rate = clk_cfg->sample_rate_hz;
     uint32_t slot_num = p_i2s[i2s_num]->total_slot < 2 ? 2 : p_i2s[i2s_num]->total_slot;
     uint32_t slot_bits = slot_cfg->slot_bit_width;
-    /* Calculate multiple */
+    /* Calculate multiple
+     * Fmclk = bck_div*fbck = fsclk/(mclk_div+b/a) */
     if (p_i2s[i2s_num]->role == I2S_ROLE_MASTER) {
         clk_info->bclk = rate * slot_num * slot_bits;
         clk_info->mclk = rate * clk_cfg->mclk_multiple;
+        // XXX The MAX9867 requires an MCLK of 10MHz or above - force that here
+        if (clk_info->mclk < 5000000) {
+            clk_info->mclk =  rate * clk_cfg->mclk_multiple * 4;
+        } else if (clk_info->mclk < 10000000) {
+            clk_info->mclk = rate * clk_cfg->mclk_multiple * 2;
+        }
         clk_info->bclk_div = clk_info->mclk / clk_info->bclk;
     } else {
         /* For slave mode, mclk >= bclk * 8, so fix bclk_div to 8 first */
@@ -767,13 +774,11 @@ static esp_err_t i2s_calculate_common_clock(int i2s_num, i2s_hal_clock_info_t *c
         clk_info->bclk = rate * slot_num * slot_bits;
         clk_info->mclk = clk_info->bclk * clk_info->bclk_div;
     }
-    /* Get I2S system clock by config source clock */
     clk_info->sclk = i2s_config_source_clock(i2s_num, p_i2s[i2s_num]->use_apll, clk_info->mclk);
-    /* Get I2S master clock rough division, later will calculate the fine division parameters in HAL */
     clk_info->mclk_div = clk_info->sclk / clk_info->mclk;
 
     /* Check if the configuration is correct */
-    ESP_RETURN_ON_FALSE(clk_info->mclk <= clk_info->sclk, ESP_ERR_INVALID_ARG, TAG, "sample rate is too large");
+    ESP_RETURN_ON_FALSE(clk_info->mclk_div, ESP_ERR_INVALID_ARG, TAG, "sample rate is too large");
 
     return ESP_OK;
 }
@@ -808,7 +813,7 @@ static esp_err_t i2s_calculate_clock(i2s_port_t i2s_num, i2s_hal_clock_info_t *c
 
     /* Calculate clock for common mode */
     ESP_RETURN_ON_ERROR(i2s_calculate_common_clock(i2s_num, clk_info), TAG, "Common clock calculate failed");
-    ESP_LOGD(TAG, "[sclk] %"PRIu32" [mclk] %"PRIu32" [mclk_div] %d [bclk] %"PRIu32" [bclk_div] %d",
+    ESP_LOGE(TAG, "[sclk] %"PRIu32" [mclk] %"PRIu32" [mclk_div] %d [bclk] %"PRIu32" [bclk_div] %d",
              clk_info->sclk, clk_info->mclk, clk_info->mclk_div, clk_info->bclk, clk_info->bclk_div);
     return ESP_OK;
 }
